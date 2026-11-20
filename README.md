@@ -1,10 +1,13 @@
 Приложение написано с нуля с помощью ИИ. Опыта работы с ИИ и с программированием у меня нет. Мой первый опыт. Делал для себя, но хотел поделиться)
+
 Если у вас несколько мониторов то при нажатии кнопки "Открыть табло" - табло будет открываться на следующем мониторе, и так по кругу.
-Для работы с проектом нужно скачать Electron. Папку node_modules. Но когда я её удаляю из папки проекта и нажимаю "Запустить", появляется такая ошибка:
+
+Для работы с проектом нужно скачать Electron. Папку node_modules. Команда для компиляции exe: npm run dist
+
+Но когда я её удаляю из папки проекта и нажимаю "Запустить", появляется такая ошибка:
 G:\Что где когда\chgk_tablo_3D\node_modules\electron\index.js:17
     throw new Error('Electron failed to install correctly, please delete node_modules/electron and try installing again');
     ^
-
 Error: Electron failed to install correctly, please delete node_modules/electron and try installing again
     at getElectronPath (G:\Что где когда\chgk_tablo_3D\node_modules\electron\index.js:17:11)
     at Object.<anonymous> (G:\Что где когда\chgk_tablo_3D\node_modules\electron\index.js:21:18)
@@ -18,6 +21,7 @@ Error: Electron failed to install correctly, please delete node_modules/electron
     at Object.<anonymous> (G:\Что где когда\chgk_tablo_3D\node_modules\electron\cli.js:3:18)
 
 Node.js v26.13.0
+
 Поэтому я приложил файл exe. Табло 3D ЧГК by Mihaalych. Это полностью рабочее приложение.
 <img width="1919" height="1079" alt="Снимок экрана 2026-11-20 152142" src="https://github.com/user-attachments/assets/0bfc4d4e-21c0-4f61-a2b2-2a8248004d01" />
 <img width="345" height="256" alt="Снимок экрана 2026-11-20 152150" src="https://github.com/user-attachments/assets/372ab708-fda6-424a-ae27-8e9d1168c001" />
