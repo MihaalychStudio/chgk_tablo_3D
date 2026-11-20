@@ -18,3 +18,5 @@ Error: Electron failed to install correctly, please delete node_modules/electron
 
 Node.js v26.13.0
 Поэтому я приложил файл exe. Табло 3D ЧГК by Mihaalych. Это полностью рабочее приложение.
+<img width="1919" height="1079" alt="Снимок экрана 2026-11-20 152142" src="https://github.com/user-attachments/assets/0bfc4d4e-21c0-4f61-a2b2-2a8248004d01" />
+<img width="345" height="256" alt="Снимок экрана 2026-11-20 152150" src="https://github.com/user-attachments/assets/372ab708-fda6-424a-ae27-8e9d1168c001" />
