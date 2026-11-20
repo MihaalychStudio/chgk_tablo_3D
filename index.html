@@ -1,0 +1,969 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>ЧГК Табло 3D</title>
+<style>
+body { margin: 0; padding: 0; background-color: #000; color: white; font-family: Arial, sans-serif; font-weight: bold; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; }
+#host-screen { display: flex; flex-direction: column; align-items: center; gap: 8px; background: #111; padding: 10px 15px; border-radius: 10px; border: 2px solid #333; z-index: 10; }
+#host-screen h1 { margin: 0; font-size: 18px; color: #F4C430; }
+.host-controls { display: flex; gap: 15px; margin-bottom: 5px; }
+.team-control { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.team-name-input { background: transparent; border: 1px dashed #555; color: #aaa; font-family: inherit; font-weight: bold; font-size: 12px; text-align: center; padding: 3px; border-radius: 4px; width: 140px; outline: none; }
+.team-name-input:focus { border-color: #F4C430; color: #fff; }
+.host-score-input { font-size: 28px; color: #F4C430; text-shadow: 0 0 5px rgba(244,196,48,0.4); line-height: 1; margin: 2px 0; background: transparent; border: 1px solid #444; border-radius: 4px; width: 60px; text-align: center; font-family: inherit; font-weight: bold; outline: none; }
+.host-score-input:disabled { opacity: 0.5; }
+.btn-group { display: flex; gap: 8px; align-items: center; }
+button { font-family: inherit; font-weight: bold; border: none; cursor: pointer; transition: 0.2s; }
+button:hover { transform: scale(1.05); }
+button:active { transform: scale(0.95); }
+button:disabled { opacity: 0.3; cursor: not-allowed; }
+.btn-plus { background-color: #28a745; color: white; padding: 12px 24px; font-size: 20px; border-radius: 6px; }
+.btn-minus { background-color: #dc3545; color: white; padding: 6px 12px; font-size: 13px; border-radius: 4px; }
+.btn-open { background-color: #007bff; color: white; font-size: 14px; padding: 8px 16px; margin-top: 5px; border-radius: 4px; }
+.btn-reset { background-color: #555; color: white; font-size: 11px; padding: 5px 10px; border-radius: 4px; }
+
+#audience-screen { display: none; width: 100vw; height: 100vh; background-color: #000; --cube-pull: 5%; }
+.team-display { width: 50%; height: 100vh; position: relative; float: left; }
+#audience-screen .team-display:first-child { transform: translateX(var(--cube-pull)); }
+#audience-screen .team-display:last-child { transform: translateX(calc(-1 * var(--cube-pull))); }
+.cube-container { width: 100%; height: 100%; position: absolute; top: 0; left: 0; }
+.cube-container canvas { width: 100%; height: 100%; display: block; }
+</style>
+
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js", "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/" } }
+</script>
+</head>
+<body>
+
+<div id="host-screen">
+<h1>Панель ведущего</h1>
+<div class="host-controls">
+<div class="team-control">
+<input type="text" class="team-name-input" id="input-name-znatoki" value="ЗНАТОКИ" oninput="updateTeamNames()">
+<input type="number" class="host-score-input" id="host-score-znatoki" value="0" min="0" max="6" step="1" onchange="updateScoreFromInput('znatoki', this.value)">
+<div class="btn-group">
+<button class="btn-minus" id="btn-znatoki-minus" onclick="changeScore('znatoki', -1)">-1</button>
+<button class="btn-plus" id="btn-znatoki-plus" onclick="changeScore('znatoki', 1)">+1</button>
+</div>
+</div>
+<div class="team-control">
+<input type="text" class="team-name-input" id="input-name-telezriteli" value="ТЕЛЕЗРИТЕЛИ И ИГРА" oninput="updateTeamNames()">
+<input type="number" class="host-score-input" id="host-score-telezriteli" value="0" min="0" max="6" step="1" onchange="updateScoreFromInput('telezriteli', this.value)">
+<div class="btn-group">
+<button class="btn-minus" id="btn-telezriteli-minus" onclick="changeScore('telezriteli', -1)">-1</button>
+<button class="btn-plus" id="btn-telezriteli-plus" onclick="changeScore('telezriteli', 1)">+1</button>
+</div>
+</div>
+</div>
+<button class="btn-reset" onclick="resetScore()">Сбросить счёт</button>
+<button class="btn-open" onclick="openAudienceScreen()">Открыть табло</button>
+</div>
+
+<div id="audience-screen">
+<div class="team-display"><div class="cube-container" id="container-znatoki"></div></div>
+<div class="team-display"><div class="cube-container" id="container-telezriteli"></div></div>
+</div>
+
+<script>
+window.ipcRenderer = null;
+try { window.ipcRenderer = require('electron').ipcRenderer; } catch (e) {}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { FontLoader } from 'three/addons/loaders/FontLoader.js';
+import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const ANIMATION_DURATION = 2000;
+const CUBE_SCALE = 1.0;
+const CUBE_RADIUS = 1.4;         
+const CUBE_SEGMENTS = 3;        
+const FACE_PLANE_SIZE = 6.2;
+const MIN_THICKNESS = 0.005;
+const MAX_THICKNESS = 2.5;
+
+const NUM_TEXT_HEIGHT = 0.55 * 0.9;
+
+let scores = { znatoki: 0, telezriteli: 0 };
+let teamNames = { znatoki: 'ЗНАТОКИ', telezriteli: 'ТЕЛЕЗРИТЕЛИ И ИГРА' };
+let audienceWindow = null;
+let baseHostWidth = 0;
+let baseHostHeight = 0;
+let isHostAnimatingZnatoki = false;
+let isHostAnimatingTelezriteli = false;
+
+// Только шрифт для цифр (заголовки рисуем через canvas с системным шрифтом)
+let numberFont = null;
+
+const threeScenes = {
+znatoki: {
+scene: null, camera: null, renderer: null, innerGroup: null, titleMesh: null,
+faceMeshes: [null, null, null, null], faceGroups: [],
+rotationCount: 0, isAnimating: false, targetRot: 0, startRot: 0, startTime: 0,
+currentDisplayed: 0, pendingTarget: null, animTargetScore: undefined
+},
+telezriteli: {
+scene: null, camera: null, renderer: null, innerGroup: null, titleMesh: null,
+faceMeshes: [null, null, null, null], faceGroups: [],
+rotationCount: 0, isAnimating: false, targetRot: 0, startRot: 0, startTime: 0,
+currentDisplayed: 0, pendingTarget: null, animTargetScore: undefined
+}
+};
+
+const urlParams = new URLSearchParams(window.location.search);
+const isAudienceView = urlParams.get('view') === 'audience';
+
+// --- ГЛОБАЛЬНЫЕ ФУНКЦИИ ПАНЕЛИ ---
+window.updateTeamNames = function() {
+if (isAudienceView) return;
+teamNames.znatoki = document.getElementById('input-name-znatoki').value;
+teamNames.telezriteli = document.getElementById('input-name-telezriteli').value;
+localStorage.setItem('chgk_names', JSON.stringify(teamNames));
+};
+
+window.changeScore = function(team, amount) {
+if (team === 'znatoki' && isHostAnimatingZnatoki) return;
+if (team === 'telezriteli' && isHostAnimatingTelezriteli) return;
+let newScore = scores[team] + amount;
+if (newScore < 0) newScore = 0;
+if (newScore > 6) newScore = 6;
+if (newScore !== scores[team]) {
+scores[team] = newScore;
+localStorage.setItem('chgk_scores', JSON.stringify(scores));
+window.updateHostPanel();
+if (team === 'znatoki') {
+isHostAnimatingZnatoki = true;
+setTimeout(() => { isHostAnimatingZnatoki = false; window.updateHostPanel(); }, ANIMATION_DURATION);
+} else {
+isHostAnimatingTelezriteli = true;
+setTimeout(() => { isHostAnimatingTelezriteli = false; window.updateHostPanel(); }, ANIMATION_DURATION);
+}
+window.updateHostPanel();
+}
+};
+
+window.updateScoreFromInput = function(team, value) {
+if (isAudienceView) return;
+if (team === 'znatoki' && isHostAnimatingZnatoki) return;
+if (team === 'telezriteli' && isHostAnimatingTelezriteli) return;
+let newScore = parseInt(value, 10);
+if (isNaN(newScore)) newScore = 0;
+if (newScore < 0) newScore = 0;
+if (newScore > 6) newScore = 6;
+if (newScore === scores[team]) {
+document.getElementById('host-score-' + team).value = newScore;
+return;
+}
+scores[team] = newScore;
+localStorage.setItem('chgk_scores', JSON.stringify(scores));
+window.updateHostPanel();
+};
+
+window.resetScore = function() {
+scores.znatoki = 0;
+scores.telezriteli = 0;
+localStorage.setItem('chgk_scores', JSON.stringify(scores));
+window.updateHostPanel();
+};
+
+window.openAudienceScreen = function() {
+if (window.ipcRenderer) {
+window.ipcRenderer.send('open-scoreboard-next-monitor', window.location.href + '?view=audience');
+} else {
+if (audienceWindow && !audienceWindow.closed) {
+audienceWindow.focus();
+return;
+}
+audienceWindow = window.open(window.location.href + '?view=audience', 'ScoreboardWindow');
+}
+};
+
+window.updateHostPanel = function() {
+if (isAudienceView) return;
+document.getElementById('host-score-znatoki').value = scores.znatoki;
+document.getElementById('host-score-telezriteli').value = scores.telezriteli;
+
+const zLock = isHostAnimatingZnatoki;
+const tLock = isHostAnimatingTelezriteli;
+
+document.getElementById('host-score-znatoki').disabled = zLock;
+document.getElementById('host-score-telezriteli').disabled = tLock;
+
+document.getElementById('btn-znatoki-minus').disabled = scores.znatoki <= 0 || zLock;
+document.getElementById('btn-znatoki-plus').disabled = scores.znatoki >= 6 || zLock;
+document.getElementById('btn-telezriteli-minus').disabled = scores.telezriteli <= 0 || tLock;
+document.getElementById('btn-telezriteli-plus').disabled = scores.telezriteli >= 6 || tLock;
+};
+
+window.scaleHostPanel = function() {
+if (isAudienceView || baseHostWidth === 0) return;
+const p = document.getElementById('host-screen');
+if (!p) return;
+const scale = Math.min(window.innerWidth / baseHostWidth, window.innerHeight / baseHostHeight);
+p.style.transform = `scale(${scale})`;
+};
+
+// --- ИНИЦИАЛИЗАЦИЯ ---
+window.onload = () => {
+if (localStorage.getItem('chgk_scores')) scores = JSON.parse(localStorage.getItem('chgk_scores'));
+if (localStorage.getItem('chgk_names')) teamNames = JSON.parse(localStorage.getItem('chgk_names'));
+
+if (isAudienceView) {
+document.getElementById('host-screen').style.display = 'none';
+const audScreen = document.getElementById('audience-screen');
+audScreen.style.display = 'flex';
+audScreen.style.justifyContent = 'space-between';
+
+const imgPink = new Image(), imgBlue = new Image();
+let loaded = 0;
+
+const fontLoader = new FontLoader();
+
+// Загружаем ТОЛЬКО шрифт цифр (League Spartan SemiBold).
+// Заголовки рисуются на canvas системным шрифтом — без внешних файлов.
+fontLoader.load(
+'League Spartan_SemiBold.typeface.json',
+(font) => { numberFont = font; console.log("Шрифт League Spartan SemiBold загружен"); startApp(); },
+undefined,
+(err) => { console.error("Ошибка загрузки League Spartan_SemiBold.typeface.json", err); startApp(); }
+);
+
+const startApp = () => {
+loaded++;
+// Ждём 2 картинки + 1 шрифт = 3
+if (loaded === 3) {
+setTimeout(() => {
+init3DScene('znatoki', imgPink, 0xAD1457);
+init3DScene('telezriteli', imgBlue, 0x3F51B5);
+resetAllFaces('znatoki', scores.znatoki);
+resetAllFaces('telezriteli', scores.telezriteli);
+animate3D();
+}, 100);
+}
+};
+
+imgPink.onload = startApp;
+imgBlue.onload = startApp;
+imgPink.onerror = startApp;
+imgBlue.onerror = startApp;
+imgPink.src = 'pink.png';
+imgBlue.src = 'blue.png';
+} else {
+document.getElementById('host-screen').style.display = 'flex';
+document.getElementById('audience-screen').style.display = 'none';
+document.getElementById('input-name-znatoki').value = teamNames.znatoki;
+document.getElementById('input-name-telezriteli').value = teamNames.telezriteli;
+window.updateHostPanel();
+setTimeout(() => {
+const p = document.getElementById('host-screen');
+baseHostWidth = p.offsetWidth;
+baseHostHeight = p.offsetHeight;
+if (window.ipcRenderer) window.ipcRenderer.send('resize-window', Math.ceil(baseHostWidth), Math.ceil(baseHostHeight));
+window.scaleHostPanel();
+}, 50);
+if (window.ipcRenderer) {
+window.addEventListener('focus', () => window.ipcRenderer.send('set-scoreboard-on-top', true));
+window.addEventListener('blur', () => window.ipcRenderer.send('set-scoreboard-on-top', false));
+document.addEventListener('mousedown', () => window.ipcRenderer.send('set-scoreboard-on-top', true));
+setTimeout(() => { if (document.hasFocus()) window.ipcRenderer.send('set-scoreboard-on-top', true); }, 500);
+}
+}
+};
+
+window.addEventListener('resize', window.scaleHostPanel);
+
+// --- ЛОГИКА THREE.JS ---
+function init3DScene(team, img, baseColor) {
+const container = document.getElementById('container-' + team);
+if (!container) return;
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(20, 1, 0.1, 200);
+camera.position.set(0, 0, 44);
+camera.layers.enable(2);
+
+const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+renderer.setSize(container.clientWidth || 500, container.clientHeight || 500);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+container.appendChild(renderer.domElement);
+
+const updateSize = () => {
+if (!container.clientWidth || !container.clientHeight) return;
+camera.aspect = container.clientWidth / container.clientHeight;
+camera.updateProjectionMatrix();
+renderer.setSize(container.clientWidth, container.clientHeight);
+};
+updateSize();
+window.addEventListener('resize', updateSize);
+
+const pmremGenerator = new THREE.PMREMGenerator(renderer);
+scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.05).texture;
+pmremGenerator.dispose();
+
+const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
+scene.add(ambientLight);
+
+const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
+hemiLight.position.set(0, 20, 0);
+scene.add(hemiLight);
+
+const dirLight1 = new THREE.DirectionalLight(0xffffff, 2.0);
+dirLight1.position.set(5, 10, 5);
+scene.add(dirLight1);
+
+const dirLight2 = new THREE.DirectionalLight(0xffffff, 1.6);
+dirLight2.position.set(-5, -10, 5);
+scene.add(dirLight2);
+
+[ambientLight, hemiLight, dirLight1, dirLight2].forEach(l => l.layers.enable(2));
+
+if (team === 'telezriteli') {
+const topLight = new THREE.DirectionalLight(0xffffff, 0.0);
+topLight.position.set(0, 5, 10);
+topLight.layers.enable(2);
+scene.add(topLight);
+}
+
+const sideLight = new THREE.DirectionalLight(0xffffff, team === 'telezriteli' ? 4.0 : 1.5);
+sideLight.position.set(team === 'znatoki' ? 10 : -10, 3, 6);
+sideLight.layers.enable(1);
+scene.add(sideLight);
+
+const rimLight = new THREE.DirectionalLight(0xffffff, team === 'telezriteli' ? 4.0 : 1.5);
+rimLight.position.set(team === 'znatoki' ? 14 : -14, -2, 2);
+rimLight.layers.enable(1);
+scene.add(rimLight);
+
+const geometry = new RoundedBoxGeometry(8.5, 8.5, 8.5, CUBE_SEGMENTS, CUBE_RADIUS);
+
+const canvas = document.createElement('canvas');
+canvas.width = 512;
+canvas.height = 512;
+const ctx = canvas.getContext('2d');
+
+ctx.fillStyle = '#' + baseColor.toString(16).padStart(6, '0');
+ctx.fillRect(0, 0, 512, 512);
+
+if (img.complete && img.naturalWidth > 0) {
+ctx.drawImage(img, 0, 0, 512, 512);
+}
+
+ctx.filter = 'blur(40px)';
+ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';
+ctx.beginPath();
+ctx.arc(512, 0, 300, 0, Math.PI * 2);
+ctx.fill();
+
+ctx.filter = 'blur(50px)';
+ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+ctx.beginPath();
+ctx.arc(0, 512, 250, 0, Math.PI * 2);
+ctx.fill();
+
+ctx.filter = 'none';
+
+const bgTexture = new THREE.CanvasTexture(canvas);
+bgTexture.colorSpace = THREE.SRGBColorSpace;
+
+const cubeEnvIntensity = team === 'telezriteli' ? 4.0 : 2.0;
+
+const bgMat = new THREE.MeshPhysicalMaterial({
+map: bgTexture,
+color: 0xffffff,
+metalness: 0.7,
+roughness: 0.05,
+clearcoat: 0.1,
+clearcoatRoughness: 0.001,
+envMapIntensity: cubeEnvIntensity
+});
+
+const materials = Array(6).fill(bgMat);
+const mesh = new THREE.Mesh(geometry, materials);
+mesh.layers.enable(1);
+
+const cubeGroup = new THREE.Group();
+cubeGroup.rotation.y = team === 'znatoki' ? -0.1 : 0.1;
+cubeGroup.scale.setScalar(CUBE_SCALE);
+cubeGroup.position.y = -0.75;
+
+const innerGroup = new THREE.Group();
+innerGroup.add(mesh);
+cubeGroup.add(innerGroup);
+scene.add(cubeGroup);
+
+const faceGroups = [];
+for (let i = 0; i < 4; i++) {
+const g = new THREE.Group();
+if (i === 0) g.position.set(0, 0, 4.26);
+else if (i === 1) { g.position.set(0, -4.26, 0); g.rotation.x = Math.PI / 2; }
+else if (i === 2) { g.position.set(0, 0, -4.26); g.rotation.x = Math.PI; }
+else if (i === 3) { g.position.set(0, 4.26, 0); g.rotation.x = -Math.PI / 2; }
+innerGroup.add(g);
+faceGroups.push(g);
+}
+
+threeScenes[team].scene = scene;
+threeScenes[team].camera = camera;
+threeScenes[team].renderer = renderer;
+threeScenes[team].innerGroup = innerGroup;
+threeScenes[team].faceGroups = faceGroups;
+threeScenes[team].faceMeshes = [null, null, null, null];
+threeScenes[team].rotationCount = 0;
+threeScenes[team].isAnimating = false;
+threeScenes[team].currentDisplayed = 0;
+threeScenes[team].pendingTarget = null;
+threeScenes[team].animTargetScore = undefined;
+
+update3DTitle(team, teamNames[team]);
+}
+
+// --- Золото с пятнистой патиной и хаотичной щёточной полировкой ---
+let goldTextures = null;
+
+function createGoldTextures() {
+  const size = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+
+  const grad = ctx.createLinearGradient(0, 0, size, size);
+  grad.addColorStop(0, '#D99A1F');
+  grad.addColorStop(0.35, '#D9A62E');
+  grad.addColorStop(0.55, '#F4C430');
+  grad.addColorStop(0.8, '#E0B83F');
+  grad.addColorStop(1, '#C08818');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+
+  for (let i = 0; i < 22; i++) {
+    const x = Math.random() * size, y = Math.random() * size;
+    const ang = Math.random() * Math.PI;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(ang);
+    ctx.filter = `blur(${22 + Math.random() * 22}px)`;
+    ctx.fillStyle = `rgba(140, 90, 15, ${0.10 + Math.random() * 0.16})`;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 45 + Math.random() * 75, 28 + Math.random() * 42, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  for (let i = 0; i < 1000; i++) {
+    const x = Math.random() * size, y = Math.random() * size;
+    const len = 5 + Math.random() * 10;   
+    const ang = Math.random() * Math.PI;
+    const w = Math.random() < 0.6 ? 3 : 4 + Math.random() * 2.5; 
+    const light = Math.random() < 0.55;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(ang);
+    ctx.strokeStyle = light
+      ? `rgba(255, 244, 205, ${0.04 + Math.random() * 0.09})`
+      : `rgba(130, 85, 15, ${0.04 + Math.random() * 0.09})`;
+    ctx.lineWidth = w;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-len / 2, 0);
+    ctx.lineTo(len / 2, 0);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  for (let i = 0; i < 25; i++) {
+    const x = Math.random() * size, y = Math.random() * size;
+    ctx.fillStyle = `rgba(110, 70, 12, ${0.05 + Math.random() * 0.09})`;
+    ctx.beginPath();
+    ctx.arc(x, y, 0.5 + Math.random() * 1.1, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const softPass = (src) => {
+    const buf = document.createElement('canvas');
+    buf.width = buf.height = size;
+    const bctx = buf.getContext('2d');
+    bctx.filter = 'blur(0.5px)';
+    bctx.drawImage(src, 0, 0);
+    return buf;
+  };
+
+  const softColor = softPass(canvas);
+  ctx.clearRect(0, 0, size, size);
+  ctx.drawImage(softColor, 0, 0);
+
+  const colorTex = new THREE.CanvasTexture(canvas);
+  colorTex.wrapS = colorTex.wrapT = THREE.RepeatWrapping;
+  colorTex.colorSpace = THREE.SRGBColorSpace;
+
+  const rCanvas = document.createElement('canvas');
+  rCanvas.width = rCanvas.height = size;
+  const rCtx = rCanvas.getContext('2d');
+  rCtx.fillStyle = '#333333';
+  rCtx.fillRect(0, 0, size, size);
+
+  for (let i = 0; i < 22; i++) {
+    const x = Math.random() * size, y = Math.random() * size;
+    const ang = Math.random() * Math.PI;
+    rCtx.save();
+    rCtx.translate(x, y);
+    rCtx.rotate(ang);
+    rCtx.filter = `blur(${22 + Math.random() * 22}px)`;
+    rCtx.fillStyle = `rgba(150, 150, 150, ${0.16 + Math.random() * 0.18})`;
+    rCtx.beginPath();
+    rCtx.ellipse(0, 0, 45 + Math.random() * 75, 28 + Math.random() * 42, 0, 0, Math.PI * 2);
+    rCtx.fill();
+    rCtx.restore();
+  }
+
+  for (let i = 0; i < 30; i++) {
+    const x = Math.random() * size, y = Math.random() * size;
+    const ang = Math.random() * Math.PI;
+    rCtx.save();
+    rCtx.translate(x, y);
+    rCtx.rotate(ang);
+    rCtx.filter = `blur(${4 + Math.random() * 8}px)`;
+    rCtx.fillStyle = `rgba(160, 160, 160, ${0.15 + Math.random() * 0.15})`;
+    rCtx.beginPath();
+    rCtx.ellipse(0, 0, 28 + Math.random() * 62, 18 + Math.random() * 44, 0, 0, Math.PI * 2);
+    rCtx.fill();
+    rCtx.restore();
+  }
+
+  for (let i = 0; i < 800; i++) {
+    const x = Math.random() * size, y = Math.random() * size;
+    const len = 3 + Math.random() * 9;   
+    const ang = Math.random() * Math.PI;
+    rCtx.save();
+    rCtx.translate(x, y);
+    rCtx.rotate(ang);
+    const v = Math.random() < 0.5 ? 60 : 110;
+    rCtx.strokeStyle = `rgba(${v}, ${v}, ${v}, ${0.08 + Math.random() * 0.12})`;
+    rCtx.lineWidth = 6 + Math.random() * 4; 
+    rCtx.lineCap = 'round';
+    rCtx.beginPath();
+    rCtx.moveTo(-len / 2, 0);
+    rCtx.lineTo(len / 2, 0);
+    rCtx.stroke();
+    rCtx.restore();
+  }
+
+  const softRough = softPass(rCanvas);
+  rCtx.clearRect(0, 0, size, size);
+  rCtx.drawImage(softRough, 0, 0);
+
+  const roughTex = new THREE.CanvasTexture(rCanvas);
+  roughTex.wrapS = roughTex.wrapT = THREE.RepeatWrapping;
+
+  return { colorTex, roughTex };
+}
+
+function makeGoldMaterial(envIntensity) {
+if (!goldTextures) goldTextures = createGoldTextures();
+const colorTex = goldTextures.colorTex.clone();
+colorTex.needsUpdate = true;
+const roughTex = goldTextures.roughTex.clone();
+roughTex.needsUpdate = true;
+
+return new THREE.MeshStandardMaterial({
+map: colorTex, 
+roughnessMap: roughTex, 
+bumpMap: roughTex, 
+bumpScale: 0.015,
+color: 0xffffff, 
+metalness: 0.7, 
+roughness: 0.9, 
+envMapIntensity: envIntensity
+});
+}
+
+function applyGoldMapping(mat, geo) {
+const uv = geo.attributes.uv;
+if (!uv) return;
+
+let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
+for (let i = 0; i < uv.count; i++) {
+const u = uv.getX(i), v = uv.getY(i);
+if (u < uMin) uMin = u;
+if (u > uMax) uMax = u;
+if (v < vMin) vMin = v;
+if (v > vMax) vMax = v;
+}
+
+const ru = (uMax - uMin) || 1;
+const rv = (vMax - vMin) || 1;
+
+[mat.map, mat.roughnessMap, mat.bumpMap].forEach(t => {
+if (!t) return;
+t.repeat.set(1 / ru, 1 / rv);
+t.offset.set(-uMin / ru, -vMin / rv);
+});
+}
+
+// --- Заголовок: canvas-рендер с системным шрифтом (никаких внешних файлов, никаких швов) ---
+function create3DTitle(text) {
+  try {
+    const fontSize = 160;
+    const padding = 24;
+    const capRatio = 0.72; // высота заглавных букв относительно размера шрифта (Arial Black)
+    const fontStack = '"Arial Black", "Franklin Gothic Heavy", Impact, sans-serif';
+    const fontSpec = `900 ${fontSize}px ${fontStack}`;
+
+    // Измеряем текст
+    const measureCanvas = document.createElement('canvas');
+    const mctx = measureCanvas.getContext('2d');
+    mctx.font = fontSpec;
+    const textWidth = mctx.measureText(text).width;
+
+    const canvasWidth = Math.max(64, Math.ceil(textWidth + padding * 2));
+    const canvasHeight = Math.ceil(fontSize + padding * 2);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+    const ctx = canvas.getContext('2d');
+
+    ctx.font = fontSpec;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center';
+
+    const cx = canvasWidth / 2;
+    const cy = canvasHeight / 2;
+
+    // Многослойный эмбосс — имитация объёмных металлических букв
+    // 1) Глубокая тень (снизу справа)
+    ctx.fillStyle = 'rgba(55, 38, 5, 1)';
+    ctx.fillText(text, cx + 5, cy + 5);
+
+    // 2) Тёмный срез
+    ctx.fillStyle = '#6B4E0F';
+    ctx.fillText(text, cx + 3, cy + 3);
+
+    // 3) Основной золотой градиент
+    const grad = ctx.createLinearGradient(0, cy - fontSize * 0.45, 0, cy + fontSize * 0.45);
+    grad.addColorStop(0.00, '#FFF4C5');
+    grad.addColorStop(0.15, '#F7D455');
+    grad.addColorStop(0.40, '#F4C430');
+    grad.addColorStop(0.65, '#D4A72C');
+    grad.addColorStop(0.85, '#B8860B');
+    grad.addColorStop(1.00, '#8B6914');
+    ctx.fillStyle = grad;
+    ctx.fillText(text, cx, cy);
+
+    // 4) Верхний блик
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = 'rgba(255, 250, 220, 0.35)';
+    ctx.lineWidth = 2;
+    ctx.strokeText(text, cx - 1, cy - 1.5);
+    ctx.restore();
+
+    // 5) Лёгкое затемнение снизу для контраста
+    ctx.save();
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.strokeStyle = 'rgba(80, 50, 10, 0.30)';
+    ctx.lineWidth = 2;
+    ctx.strokeText(text, cx + 1, cy + 1.5);
+    ctx.restore();
+
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.anisotropy = 8;
+    tex.needsUpdate = true;
+
+    // Мировой размер: заглавные буквы ровно 0.6 юнита (как раньше size: 0.6)
+    const measuredCapHeight = fontSize * capRatio;
+    const pixelsToWorld = 0.6 / measuredCapHeight;
+    let worldPlaneHeight = canvasHeight * pixelsToWorld;
+    let worldPlaneWidth = canvasWidth * pixelsToWorld;
+
+    const maxWidth = 13.0;
+    if (worldPlaneWidth > maxWidth) {
+      const s = maxWidth / worldPlaneWidth;
+      worldPlaneWidth *= s;
+      worldPlaneHeight *= s;
+    }
+
+    const geo = new THREE.PlaneGeometry(worldPlaneWidth, worldPlaneHeight);
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      depthWrite: false,
+      toneMapped: false
+    });
+
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(0, 6.0, 0);
+    mesh.layers.set(2);
+    return mesh;
+  } catch (e) {
+    console.error("Ошибка создания 3D заголовка", e);
+    return null;
+  }
+}
+
+function update3DTitle(team, text) {
+const cube = threeScenes[team];
+if (!cube || !cube.scene) return;
+
+if (cube.titleMesh) {
+cube.scene.remove(cube.titleMesh);
+cube.titleMesh.traverse((child) => {
+if (child.isMesh) {
+if (child.geometry) child.geometry.dispose();
+if (child.material) {
+if (child.material.map) child.material.map.dispose();
+child.material.dispose();
+}
+}
+});
+cube.titleMesh = null;
+}
+
+const newMesh = create3DTitle(text);
+if (newMesh) {
+cube.scene.add(newMesh);
+cube.titleMesh = newMesh;
+}
+}
+
+function create3DNumber(number) {
+if (numberFont) {
+try {
+const geo = new TextGeometry(number.toString(), {
+font: numberFont,
+size: 5, 
+height: NUM_TEXT_HEIGHT, 
+depth: NUM_TEXT_HEIGHT, 
+curveSegments: 12, 
+bevelEnabled: true, 
+bevelThickness: 0.08, 
+bevelSize: 0.08, 
+bevelSegments: 5 
+});
+geo.center();
+
+const mat = makeGoldMaterial(1.3);
+applyGoldMapping(mat, geo);
+
+const mesh = new THREE.Mesh(geo, mat);
+mesh.position.z = 0.1;
+mesh.layers.set(2);
+return mesh;
+} catch (e) {
+console.error("Ошибка TextGeometry, используется запасной вариант", e);
+}
+}
+const canvas = document.createElement('canvas');
+canvas.width = 512;
+canvas.height = 512;
+const ctx = canvas.getContext('2d');
+ctx.textAlign = 'center';
+ctx.textBaseline = 'middle';
+ctx.font = '600 420px "League Spartan", Arial, sans-serif';
+
+const numLayers = 25;
+for (let j = numLayers; j > 0; j--) {
+const r = Math.floor(120 + (100 / numLayers) * j);
+const g = Math.floor(100 + (80 / numLayers) * j);
+ctx.fillStyle = `rgb(${r}, ${g}, 0)`;
+ctx.fillText(number.toString(), 256 + j * 2, 256 + j * 2);
+}
+
+const gold = ctx.createLinearGradient(50, 50, 450, 450);
+gold.addColorStop(0, '#A67810');   
+gold.addColorStop(0.3, '#D4A72C'); 
+gold.addColorStop(0.5, '#F4C430'); 
+gold.addColorStop(0.7, '#D4A72C'); 
+gold.addColorStop(1, '#A67810');   
+
+ctx.fillStyle = gold;
+ctx.fillText(number.toString(), 256, 256);
+
+const tex = new THREE.CanvasTexture(canvas);
+tex.colorSpace = THREE.SRGBColorSpace;
+const mesh = new THREE.Mesh(
+new THREE.PlaneGeometry(FACE_PLANE_SIZE, FACE_PLANE_SIZE),
+new THREE.MeshBasicMaterial({ map: tex, transparent: true })
+);
+mesh.position.z = 0.1;
+mesh.layers.set(2);
+return mesh;
+}
+
+function disposeMesh(mesh) {
+if (!mesh) return;
+if (mesh.geometry) mesh.geometry.dispose();
+if (mesh.material) {
+if (mesh.material.map) mesh.material.map.dispose();
+mesh.material.dispose();
+}
+}
+
+function setFaceNumber(team, faceIndex, number) {
+const cube = threeScenes[team];
+if (!cube || !cube.faceGroups[faceIndex]) return;
+if (cube.faceMeshes[faceIndex]) {
+cube.faceGroups[faceIndex].remove(cube.faceMeshes[faceIndex]);
+disposeMesh(cube.faceMeshes[faceIndex]);
+cube.faceMeshes[faceIndex] = null;
+}
+if (number >= 0 && number <= 6) {
+const mesh = create3DNumber(number);
+if (mesh) {
+cube.faceGroups[faceIndex].add(mesh);
+cube.faceMeshes[faceIndex] = mesh;
+}
+}
+}
+
+function updateFaceThickness(cube) {
+if (!cube || !cube.innerGroup || !cube.faceGroups) return;
+const theta = cube.innerGroup.rotation.x;
+const factors = [
+Math.cos(theta),
+-Math.sin(theta),
+-Math.cos(theta),
+Math.sin(theta)
+];
+for (let i = 0; i < 4; i++) {
+const f = Math.max(0, factors[i]);
+const thickness = f * f * MAX_THICKNESS;
+cube.faceGroups[i].scale.z = Math.max(MIN_THICKNESS, thickness);
+}
+}
+
+function resetAllFaces(team, score) {
+const cube = threeScenes[team];
+if (!cube || !cube.innerGroup) return;
+cube.isAnimating = false;
+cube.rotationCount = 0;
+cube.startRot = 0;
+cube.targetRot = 0;
+cube.startTime = 0;
+cube.innerGroup.rotation.x = 0;
+cube.currentDisplayed = score;
+cube.pendingTarget = null;
+cube.animTargetScore = undefined;
+
+setFaceNumber(team, 0, score);
+setFaceNumber(team, 1, score + 1 <= 6 ? score + 1 : -1);
+setFaceNumber(team, 2, -1);
+setFaceNumber(team, 3, -1);
+
+updateFaceThickness(cube);
+}
+
+function triggerAnimation(team, direction, newScore) {
+const cube = threeScenes[team];
+if (!cube || !cube.scene || !cube.innerGroup || cube.isAnimating) return;
+
+const r = cube.rotationCount % 4;
+let nextFrontIdx, nextBackIdx;
+
+if (direction === 1) {
+nextFrontIdx = (r + 1) % 4;
+nextBackIdx = (r + 3) % 4;
+} else {
+nextFrontIdx = (r + 3) % 4;
+nextBackIdx = (r + 1) % 4;
+}
+
+setFaceNumber(team, nextFrontIdx, newScore);
+setFaceNumber(team, nextBackIdx, -1);
+
+cube.isAnimating = true;
+cube.startTime = performance.now();
+cube.startRot = cube.innerGroup.rotation.x;
+cube.targetRot = cube.startRot - (direction * Math.PI / 2);
+cube.animTargetScore = newScore;
+}
+
+function handleScoreChange(team, newTarget) {
+const cube = threeScenes[team];
+if (!cube || !cube.scene) return;
+
+if (cube.isAnimating) {
+cube.pendingTarget = newTarget;
+return;
+}
+
+if (cube.currentDisplayed === newTarget) return;
+
+const direction = newTarget > cube.currentDisplayed ? 1 : -1;
+triggerAnimation(team, direction, newTarget);
+}
+
+function animate3D() {
+requestAnimationFrame(animate3D);
+['znatoki', 'telezriteli'].forEach(team => {
+const cube = threeScenes[team];
+if (!cube || !cube.scene) return;
+if (cube.isAnimating) {
+const now = performance.now();
+const elapsed = now - cube.startTime;
+let progress = Math.min(elapsed / ANIMATION_DURATION, 1);
+progress = progress < 0.5
+? 2 * progress * progress
+: 1 - Math.pow(-2 * progress + 2, 2) / 2;
+cube.innerGroup.rotation.x = cube.startRot + (cube.targetRot - cube.startRot) * progress;
+if (progress >= 1) {
+cube.isAnimating = false;
+cube.innerGroup.rotation.x = cube.targetRot;
+if (cube.targetRot < cube.startRot) {
+cube.rotationCount = (cube.rotationCount + 1) % 4;
+} else {
+cube.rotationCount = (cube.rotationCount + 3) % 4;
+}
+
+if (cube.animTargetScore !== undefined) {
+cube.currentDisplayed = cube.animTargetScore;
+cube.animTargetScore = undefined;
+}
+
+const pending = cube.pendingTarget;
+cube.pendingTarget = null;
+if (pending !== null && pending !== cube.currentDisplayed) {
+const direction = pending > cube.currentDisplayed ? 1 : -1;
+triggerAnimation(team, direction, pending);
+}
+}
+}
+updateFaceThickness(cube);
+cube.renderer.render(cube.scene, cube.camera);
+});
+}
+
+// --- СИНХРОНИЗАЦИЯ ---
+window.addEventListener('storage', (event) => {
+if (event.key === 'chgk_scores') {
+const oldScores = { ...scores };
+scores = JSON.parse(event.newValue);
+if (isAudienceView) {
+['znatoki', 'telezriteli'].forEach(team => {
+if (scores[team] !== oldScores[team]) {
+handleScoreChange(team, scores[team]);
+}
+});
+} else {
+window.updateHostPanel();
+}
+}
+if (event.key === 'chgk_names') {
+teamNames = JSON.parse(event.newValue);
+if (isAudienceView) {
+update3DTitle('znatoki', teamNames.znatoki);
+update3DTitle('telezriteli', teamNames.telezriteli);
+}
+}
+});
+</script>
+</body>
+</html>

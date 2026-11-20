@@ -1,0 +1,22 @@
+{
+  "name": "chgk-tablo",
+  "version": "1.0.0",
+  "description": "Табло для игры Что? Где? Когда?",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "^29.0.0",
+    "electron-builder": "^24.0.0"
+  },
+  "build": {
+    "appId": "com.chgk.tablo",
+    "productName": "CHGK-Tablo",
+    "win": {
+      "icon": "icon.ico",
+      "target": "portable"
+    }
+  }
+}
